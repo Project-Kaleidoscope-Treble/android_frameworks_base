@@ -16,6 +16,7 @@
  */
 package com.android.internal.util.kscope;
 
+import android.app.Application;
 import android.os.Build;
 import android.os.SystemProperties;
 import android.util.Log;
@@ -27,19 +28,14 @@ import java.util.Map;
 
 public class CustomPropsUtils {
 
-    public static final String PACKAGE_GMS = "com.google.android.gms";
+    private static final String PACKAGE_GMS = "com.google.android.gms";
+    private static final String PROCESS_UNSTABLE = "com.google.android.gms.unstable";
+    private static final String PACKAGE_FINSKY = "com.android.vending";
 
     private static final String SPOOF_MUSIC_APPS = "persist.sys.disguise_props_for_music_app";
 
     private static final String TAG = CustomPropsUtils.class.getSimpleName();
     private static final boolean DEBUG = false;
-
-    private static final Map<String, Object> propsToChangePixel6;
-    private static final String[] packagesToChangePixel6 = {
-            "com.google.android.gms",
-            "com.google.android.gsf",
-            "com.google.android.inputmethod.latin"
-    };
 
     private static final Map<String, Object> propsToChangePixelXL;
     private static final String[] packagesToChangePixelXL = {
@@ -58,16 +54,9 @@ public class CustomPropsUtils {
     };
 
     private static volatile boolean sIsGms = false;
+    private static volatile boolean sIsFinsky = false;
 
     static {
-        propsToChangePixel6 = new HashMap<>();
-        propsToChangePixel6.put("BRAND", "google");
-        propsToChangePixel6.put("MANUFACTURER", "Google");
-        propsToChangePixel6.put("DEVICE", "raven");
-        propsToChangePixel6.put("PRODUCT", "raven");
-        propsToChangePixel6.put("MODEL", "Pixel 6 Pro");
-        propsToChangePixel6.put(
-            "FINGERPRINT", "google/raven/raven:13/TP1A.221105.002/9080065:user/release-keys");
         propsToChangePixelXL = new HashMap<>();
         propsToChangePixelXL.put("BRAND", "google");
         propsToChangePixelXL.put("MANUFACTURER", "Google");
@@ -85,18 +74,35 @@ public class CustomPropsUtils {
         propsToChangeMeizu.put("MODEL", "meizu 16th Plus");
     }
 
+    public static boolean setPropsForGms(String packageName) {
+        if (packageName.equals(PACKAGE_GMS)) {
+            final String processName = Application.getProcessName();
+
+            if (PROCESS_UNSTABLE.equals(processName)) {
+                sIsGms = true;
+
+                if (DEBUG) Log.d(TAG, "Spoofing build for GMS");
+                setPropValue("DEVICE", "walleye");
+                setPropValue("PRODUCT", "walleye");
+                setPropValue("MODEL", "Pixel 2");
+                setPropValue("FINGERPRINT", "google/walleye/walleye:8.1.0/OPM1.171019.011/4448085:user/release-keys");
+                setVersionField("DEVICE_INITIAL_SDK_INT", Build.VERSION_CODES.O);
+            }
+        } else if (packageName.equals(PACKAGE_FINSKY)) {
+            sIsFinsky = true;
+        } else {
+            return false;
+        }
+
+        return true;
+    }
+
     public static void setProps(String packageName) {
-        if (packageName == null) {
+        if (packageName == null || packageName.isEmpty()) {
             return;
         }
-        if (packageName.equals(PACKAGE_GMS)) {
-            sIsGms = true;
-        }
-        if (Arrays.asList(packagesToChangePixel6).contains(packageName)) {
-            if (DEBUG) Log.d(TAG, "Defining props for: " + packageName);
-            for (Map.Entry<String, Object> prop : propsToChangePixel6.entrySet()) {
-                setPropValue(prop.getKey(), prop.getValue());
-            }
+        if (setPropsForGms(packageName)) {
+            return;
         }
         if (Arrays.asList(packagesToChangePixelXL).contains(packageName)) {
             if (DEBUG) Log.d(TAG, "Defining props for: " + packageName);
@@ -125,14 +131,26 @@ public class CustomPropsUtils {
         }
     }
 
+    private static void setVersionField(String key, Integer value) {
+        try {
+            if (DEBUG) Log.d(TAG, "Defining version field " + key + " to " + value.toString());
+            Field field = Build.VERSION.class.getDeclaredField(key);
+            field.setAccessible(true);
+            field.set(null, value);
+            field.setAccessible(false);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            Log.e(TAG, "Failed to set version field " + key, e);
+        }
+    }
+
     private static boolean isCallerSafetyNet() {
-        return Arrays.stream(Thread.currentThread().getStackTrace())
+        return sIsGms && Arrays.stream(Thread.currentThread().getStackTrace())
                 .anyMatch(elem -> elem.getClassName().contains("DroidGuard"));
     }
 
     public static void onEngineGetCertificateChain() {
-        // Check stack for SafetyNet
-        if (sIsGms && isCallerSafetyNet()) {
+        // Check stack for SafetyNet or Play Integrity
+        if (isCallerSafetyNet() || sIsFinsky) {
             throw new UnsupportedOperationException();
         }
     }
